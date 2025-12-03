@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Stack Rush</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no" />
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    body {
+      background: #050816;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      color: #fff;
+    }
+
+    #game-container {
+      position: relative;
+      width: 400px;
+      max-width: 100vw;
+      height: 600px;
+      max-height: 100vh;
+      border-radius: 18px;
+      overflow: hidden;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.75);
+      background: radial-gradient(circle at top, #1a237e 0, #000 70%);
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    #ui-overlay {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 12px;
+    }
+
+    .top-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 14px;
+      text-shadow: 0 0 4px rgba(0, 0, 0, 0.8);
+    }
+
+    .badge {
+      background: rgba(0, 0, 0, 0.55);
+      border-radius: 999px;
+      padding: 6px 14px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .badge-label {
+      opacity: 0.8;
+      font-size: 11px;
+      text-transform: uppercase;
+    }
+
+    .badge-value {
+      font-size: 15px;
+    }
+
+    #center-message {
+      pointer-events: none;
+      text-align: center;
+      margin-top: 72px;
+      text-shadow: 0 0 12px rgba(0,0,0,0.9);
+      padding: 0 16px;
+      transition: opacity 0.25s ease;
+    }
+
+    #center-message h1 {
+      font-size: 28px;
+      margin-bottom: 6px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+
+    #center-message h1 span {
+      font-weight: 800;
+    }
+
+    #center-message p {
+      font-size: 14px;
+      opacity: 0.9;
+    }
+
+    #tap-hint {
+      font-size: 12px;
+      opacity: 0.75;
+      margin-top: 10px;
+    }
+
+    #game-over-banner {
+      margin-top: 16px;
+      font-size: 13px;
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+
+    #game-over-banner.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    #bottom-row {
+      text-align: center;
+      font-size: 11px;
+      opacity: 0.8;
+      margin-bottom: 8px;
+      text-shadow: 0 0 4px rgba(0, 0, 0, 0.8);
+      transition: opacity 0.25s ease;
+    }
+
+    @media (max-width: 480px) {
+      #game-container {
+        width: 100vw;
+        height: 100vh;
+        border-radius: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="game-container">
+    <canvas id="game"></canvas>
+    <div id="ui-overlay">
+      <div class="top-row">
+        <div class="badge">
+          <span class="badge-label">Score</span>
+          <span class="badge-value" id="score">0</span>
+        </div>
+        <div class="badge">
+          <span class="badge-label">Best</span>
+          <span class="badge-value" id="bestScore">0</span>
+        </div>
+      </div>
+
+      <div id="center-message">
+        <h1><span>STACK</span> RUSH</h1>
+        <p>Tap to drop the moving block exactly on top of the last one. Miss the stack and it's game over.</p>
+        <p id="tap-hint">Tap anywhere to start</p>
+        <div id="game-over-banner"></div>
+      </div>
+
+      <div id="bottom-row">
+        Pro tip: Perfect drops keep your tower wide. Tiny blocks make it almost impossible.
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+
+    const scoreSpan = document.getElementById("score");
+    const bestScoreSpan = document.getElementById("bestScore");
+    const centerMessage = document.getElementById("center-message");
+    const tapHint = document.getElementById("tap-hint");
+    const gameOverBanner = document.getElementById("game-over-banner");
+    const bottomRow = document.getElementById("bottom-row");
+
+    function resizeCanvas() {
+      const container = document.getElementById("game-container");
+      const rect = container.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      canvas.style.width = rect.width + "px";
+      canvas.style.height = rect.height + "px";
+    }
+    resizeCanvas();
+    window.addEventListener("resize", resizeCanvas);
+
+    // Game state
+    let blocks = [];
+    let currentBlock = null;
+    let direction = 1;
+    let speed = 3;
+    let lastTime = 0;
+
+    let score = 0;
+    let bestScore = parseInt(localStorage.getItem("stackRushBest") || "0", 10);
+    let isGameOver = false;
+    let hasStarted = false;
+
+    // For the "7 blocks wide, 1 block min" logic
+    let minBlockWidth = 0; // will be baseWidth / 7
+    const SEGMENTS = 7;
+
+    bestScoreSpan.textContent = bestScore;
+
+    function resetUIForStart() {
+      centerMessage.style.opacity = 1;
+      bottomRow.style.opacity = 1;
+      centerMessage.querySelector("h1").innerHTML = "<span>STACK</span> RUSH";
+      centerMessage.querySelectorAll("p")[0].textContent =
+        "Tap to drop the moving block exactly on top of the last one. Miss the stack and it's game over.";
+      tapHint.textContent = "Tap anywhere to start";
+      gameOverBanner.classList.remove("visible");
+      gameOverBanner.textContent = "";
+    }
+
+    function hideCenterTextDuringPlay() {
+      centerMessage.style.opacity = 0;
+      bottomRow.style.opacity = 0;
+    }
+
+    function startGame() {
+      blocks = [];
+      speed = 3;
+      score = 0;
+      isGameOver = false;
+      hasStarted = true;
+
+      scoreSpan.textContent = score;
+      resetUIForStart();
+      hideCenterTextDuringPlay();
+
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+
+      // Base width represents 7 "blocks" wide
+      const baseWidth = width * 0.7;
+      const blockHeight = 24;
+
+      // Compute minimum width: 1 "block" out of 7
+      minBlockWidth = baseWidth / SEGMENTS;
+
+      const baseBlock = {
+        x: (width - baseWidth) / 2,
+        y: height - blockHeight,
+        width: baseWidth,
+        height: blockHeight,
+        color: "#29b6f6"
+      };
+      blocks.push(baseBlock);
+      spawnMovingBlock();
+    }
+
+    function spawnMovingBlock() {
+      const width = canvas.clientWidth;
+      const blockHeight = 24;
+      const prev = blocks[blocks.length - 1];
+      const newWidth = prev.width;
+      const y = prev.y - blockHeight;
+      const startLeft = Math.random() < 0.5;
+
+      currentBlock = {
+        x: startLeft ? -newWidth : width,
+        y: y,
+        width: newWidth,
+        height: blockHeight,
+        color: randomColor(),
+        moving: true
+      };
+      direction = startLeft ? 1 : -1;
+    }
+
+    function randomColor() {
+      const colors = ["#29b6f6", "#7c4dff", "#ff4081", "#00e5ff", "#ff9100", "#64ffda"];
+      return colors[Math.floor(Math.random() * colors.length)];
+    }
+
+    function update(dt) {
+      if (currentBlock && currentBlock.moving && !isGameOver) {
+        currentBlock.x += direction * speed * (dt / 16.67);
+        const width = canvas.clientWidth;
+
+        // Bounce when fully off-screen
+        if (direction === 1 && currentBlock.x > width) {
+          direction = -1;
+        } else if (direction === -1 && currentBlock.x + currentBlock.width < 0) {
+          direction = 1;
+        }
+      }
+    }
+
+    function draw() {
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+
+      // Background gradient
+      const gradient = ctx.createLinearGradient(0, 0, 0, height);
+      gradient.addColorStop(0, "#1a237e");
+      gradient.addColorStop(1, "#000000");
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, width, height);
+
+      // Subtle ground
+      ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+      ctx.fillRect(0, height - 18, width, 24);
+
+      // Stacked blocks
+      blocks.forEach((b) => {
+        drawBlock(b);
+      });
+
+      // Moving block
+      if (currentBlock) {
+        drawBlock(currentBlock);
+      }
+
+      if (isGameOver) {
+        ctx.save();
+        ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
+        ctx.fillRect(0, 0, width, height);
+        ctx.restore();
+      }
+    }
+
+    function drawBlock(block) {
+      ctx.save();
+      const radius = 6;
+      const x = block.x;
+      const y = block.y;
+      const w = block.width;
+      const h = block.height;
+
+      ctx.fillStyle = block.color;
+
+      ctx.beginPath();
+      const r = Math.min(radius, w / 2, h / 2);
+      ctx.moveTo(x + r, y);
+      ctx.lineTo(x + w - r, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+      ctx.lineTo(x + w, y + h - r);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      ctx.lineTo(x + r, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+      ctx.lineTo(x, y + r);
+      ctx.quadraticCurveTo(x, y, x + r, y);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    function gameLoop(timestamp) {
+      const dt = timestamp - lastTime;
+      lastTime = timestamp;
+
+      if (hasStarted && !isGameOver) {
+        update(dt);
+      }
+      draw();
+
+      requestAnimationFrame(gameLoop);
+    }
+    requestAnimationFrame(gameLoop);
+
+    function endGame() {
+      isGameOver = true;
+      hasStarted = false;
+      currentBlock = null;
+
+      if (score > bestScore) {
+        bestScore = score;
+        localStorage.setItem("stackRushBest", String(bestScore));
+        bestScoreSpan.textContent = bestScore;
+      }
+
+      centerMessage.style.opacity = 1;
+      bottomRow.style.opacity = 1;
+
+      centerMessage.querySelector("h1").innerHTML = "Game Over";
+      centerMessage.querySelectorAll("p")[0].textContent =
+        "You stacked " + score + " blocks. Your best is " + bestScore + ".";
+      tapHint.textContent = "Tap anywhere to play again";
+
+      gameOverBanner.textContent =
+        "You can shrink all the way to a single-width block. Any smaller and it's over.";
+      gameOverBanner.classList.add("visible");
+    }
+
+    function handleTap() {
+      // First tap ever or restart
+      if (!hasStarted && (blocks.length === 0 || isGameOver)) {
+        startGame();
+        return;
+      }
+
+      if (isGameOver) {
+        startGame();
+        return;
+      }
+
+      if (!currentBlock) {
+        return;
+      }
+
+      // We're in active play, ensure text is hidden
+      hideCenterTextDuringPlay();
+
+      currentBlock.moving = false;
+
+      const prev = blocks[blocks.length - 1];
+      const overlapStart = Math.max(currentBlock.x, prev.x);
+      const overlapEnd = Math.min(currentBlock.x + currentBlock.width, prev.x + prev.width);
+      const overlapWidth = overlapEnd - overlapStart;
+
+      if (overlapWidth <= 0) {
+        // Missed completely
+        endGame();
+        return;
+      }
+
+      // Successful placement, crop to overlap
+      currentBlock.width = overlapWidth;
+      currentBlock.x = overlapStart;
+      blocks.push(currentBlock);
+      currentBlock = null;
+
+      score += 1;
+      scoreSpan.textContent = score;
+
+      // Increase difficulty with score
+      speed = 3 + score * 0.2;
+
+      // Die only when you go smaller than one "unit"
+      // (You can reach exactly minBlockWidth and still be alive)
+      const lastWidth = blocks[blocks.length - 1].width;
+      if (lastWidth < minBlockWidth) {
+        endGame();
+        return;
+      }
+
+      spawnMovingBlock();
+    }
+
+    canvas.addEventListener("click", handleTap);
+    canvas.addEventListener(
+      "touchstart",
+      function (e) {
+        e.preventDefault();
+        handleTap();
+      },
+      { passive: false }
+    );
+  </script>
+</body>
+</html>
